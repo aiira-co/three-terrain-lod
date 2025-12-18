@@ -1,6 +1,17 @@
-# Three Terrain LOD
+# @interverse/three-terrain-lod
 
 High-performance LOD terrain system for Three.js with quadtree-based chunking and **swappable materials**.
+
+## 📦 Installation
+
+```bash
+npm install @interverse/three-terrain-lod
+# or
+yarn add @interverse/three-terrain-lod
+```
+
+**Peer Dependencies:**
+- `three` >= 0.182.0
 
 ## Features
 
@@ -21,7 +32,7 @@ yarn add three-terrain-lod
 ## Quick Start
 
 ```typescript
-import { TerrainLOD } from 'three-terrain-lod';
+import { TerrainLOD } from '@interverse/three-terrain-lod';
 
 const terrain = new TerrainLOD({
   heightMapUrl: 'terrain_heightmap.png',
@@ -62,7 +73,7 @@ interface TerrainConfig {
 Implement `TerrainMaterialProvider` to use custom materials:
 
 ```typescript
-import { TerrainMaterialProvider, TerrainMaterialContext } from 'three-terrain-lod';
+import { TerrainMaterialProvider, TerrainMaterialContext } from '@interverse/three-terrain-lod';
 
 class MyTerrainMaterial implements TerrainMaterialProvider {
   private material: THREE.Material;
@@ -98,7 +109,7 @@ terrain.resetMaterial();
 ### LayeredMaterial Integration Example
 
 ```typescript
-import { LayeredMaterial } from 'three-layered-material';
+import { LayeredMaterial } from '@interverse/three-layered-material';
 
 class LayeredTerrainProvider implements TerrainMaterialProvider {
   private layeredMaterial: LayeredMaterial;
