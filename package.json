@@ -1,6 +1,6 @@
 {
     "name": "@interverse/three-terrain-lod",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "High-performance LOD terrain system for Three.js with quadtree-based chunking and swappable materials",
     "main": "dist/index.js",
     "module": "dist/index.mjs",
@@ -50,10 +50,10 @@
     },
     "repository": {
         "type": "git",
-        "url": ""
+        "url": "git+https://github.com/aiira-co/three-terrain-lod.git"
     },
     "bugs": {
-        "url": ""
+        "url": "https://github.com/aiira-co/three-terrain-lod/issues"
     },
-    "homepage": ""
+    "homepage": "https://github.com/aiira-co/three-terrain-lod#readme"
 }
