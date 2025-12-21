@@ -3,7 +3,10 @@ export {
   ResolvedTerrainConfig,
   TerrainMaterialProvider,
   TerrainMaterialContext,
-  ChunkInstanceData
+  ChunkInstanceData,
+  ChunkCollisionData,
+  ChunkCollisionCallback,
+  CollisionResolution
 } from './types';
 export { InstancePool } from './InstancePool';
 export { QuadtreeNode, setCurrentCamera, getCurrentCamera } from './QuadtreeNode';

@@ -11,4 +11,4 @@ export {
 } from './core';
 
 // Material exports
-export { DefaultTerrainMaterial } from './materials';
+export { DefaultTerrainMaterial, TerrainMaterialNodes } from './materials';

@@ -142,3 +142,48 @@ export interface ChunkInstanceData {
   uvOffsetX: number;
   uvOffsetY: number;
 }
+
+// ============================================
+// Collision Types
+// ============================================
+
+/**
+ * Resolution options for collision heightfield
+ */
+export type CollisionResolution = 32 | 64 | 128;
+
+/**
+ * Data needed to create a physics heightfield collider for a chunk.
+ * This is physics-engine agnostic - adapters in user code convert to Rapier/Jolt/etc.
+ */
+export interface ChunkCollisionData {
+  /** Chunk world position (center) */
+  position: { x: number; y: number; z: number };
+  /** Chunk size in world units */
+  size: number;
+  /** Chunk grid index */
+  index: { x: number; z: number };
+  /** LOD level (0 = highest detail) */
+  lodLevel: number;
+  /** Number of rows in heightfield grid */
+  rows: number;
+  /** Number of columns in heightfield grid */
+  cols: number;
+  /** Height values (0-maxHeight), row-major order. Length = rows * cols */
+  heights: Float32Array;
+  /** Maximum height value for this terrain */
+  maxHeight: number;
+  /** Scale vector for physics shape (sizeX, 1, sizeZ) */
+  scale: { x: number; y: number; z: number };
+}
+
+/**
+ * Callback interface for chunk LOD changes.
+ * Implement this to manage dynamic collision based on camera distance.
+ */
+export interface ChunkCollisionCallback {
+  /** Called when a chunk enters LOD0 (highest detail, closest to camera) */
+  onChunkEnterLOD0?(chunk: ChunkCollisionData): void;
+  /** Called when a chunk exits LOD0 (moved away from camera) */
+  onChunkExitLOD0?(chunkIndex: { x: number; z: number }): void;
+}

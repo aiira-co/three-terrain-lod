@@ -204,6 +204,84 @@ void main() {
 }
 ```
 
+## Collision API
+
+The terrain provides physics-engine-agnostic collision data for integration with Rapier, Jolt, or other physics engines.
+
+### Pre-computing Collision Data
+
+```typescript
+// After terrain is initialized, pre-compute collision data
+await terrain.computeAllCollisionData();
+
+// Set resolution: 32, 64, or 128 (subdivisions per chunk)
+terrain.setCollisionResolution(64);
+```
+
+### Getting Chunk Collision Data
+
+```typescript
+// Get collision data for a specific chunk
+const chunkData = terrain.getChunkCollisionData(0, 0);
+
+if (chunkData) {
+  // chunkData.heights - Float32Array of height values
+  // chunkData.rows / chunkData.cols - Grid dimensions
+  // chunkData.position - World position { x, y, z }
+  // chunkData.scale - Physics shape scale { x, y, z }
+  // chunkData.maxHeight - Maximum terrain height
+}
+
+// Get all cached collision data
+const allChunks = terrain.getAllCollisionData();
+```
+
+### Dynamic Collision (LOD-based)
+
+```typescript
+// Set up collision callback for dynamic loading/unloading
+terrain.setCollisionCallback({
+  onChunkEnterLOD0(chunk) {
+    // Chunk is now in highest detail - create physics collider
+    const collider = physics.createHeightfield(
+      chunk.rows - 1,
+      chunk.cols - 1,
+      chunk.heights,
+      chunk.scale
+    );
+    collider.setTranslation(chunk.position);
+  },
+  
+  onChunkExitLOD0(index) {
+    // Chunk is no longer in LOD0 - remove collider
+    physics.removeCollider(index.x, index.z);
+  }
+});
+```
+
+### Height Query
+
+```typescript
+// Sample terrain height at any world position
+const height = terrain.getHeightAt(playerX, playerZ);
+```
+
+### ChunkCollisionData Interface
+
+```typescript
+interface ChunkCollisionData {
+  position: { x: number; y: number; z: number };
+  size: number;
+  index: { x: number; z: number };
+  lodLevel: number;
+  rows: number;
+  cols: number;
+  heights: Float32Array;
+  maxHeight: number;
+  scale: { x: number; y: number; z: number };
+}
+```
+
 ## License
 
 MIT

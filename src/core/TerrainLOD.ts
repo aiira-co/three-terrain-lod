@@ -4,7 +4,10 @@ import {
   ResolvedTerrainConfig,
   TerrainMaterialProvider,
   TerrainMaterialContext,
-  ChunkInstanceData
+  ChunkInstanceData,
+  ChunkCollisionData,
+  ChunkCollisionCallback,
+  CollisionResolution
 } from './types';
 import { InstancePool } from './InstancePool';
 import { QuadtreeNode, setCurrentCamera } from './QuadtreeNode';
@@ -49,6 +52,12 @@ export class TerrainLOD extends THREE.Group {
   private materialProvider: TerrainMaterialProvider;
   private defaultMaterialProvider: DefaultTerrainMaterial;
   private currentMaterial: THREE.Material | null = null;
+
+  // Collision support
+  private collisionCache: Map<string, ChunkCollisionData> = new Map();
+  private collisionCallback: ChunkCollisionCallback | null = null;
+  private collisionResolution: CollisionResolution = 32;
+  private heightmapImageData: ImageData | null = null;
 
   constructor(config: TerrainConfig = {}) {
     super();
@@ -449,6 +458,327 @@ export class TerrainLOD extends THREE.Group {
     };
   }
 
+  // ============================================
+  // Heightmap Streaming API
+  // ============================================
+
+  /**
+   * Set/replace the heightmap texture.
+   * Use this when you have a pre-built THREE.Texture.
+   * @param texture - The new heightmap texture
+   * @param invalidateCollision - Whether to clear collision cache (default: true)
+   */
+  public setHeightMap(texture: THREE.Texture, invalidateCollision = true): void {
+    if (this.heightMap && this.heightMap !== texture) {
+      this.heightMap.dispose();
+    }
+
+    this.heightMap = texture;
+    texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = THREE.LinearMipMapLinearFilter;
+    texture.needsUpdate = true;
+
+    // Notify material provider
+    this.materialProvider.onHeightMapUpdate?.(texture);
+
+    // Recreate material with new heightmap
+    this.recreateMaterial();
+
+    // Invalidate collision cache
+    if (invalidateCollision) {
+      this.collisionCache.clear();
+      this.heightmapImageData = null;
+    }
+  }
+
+  /**
+   * Update the heightmap from an HTMLCanvasElement.
+   * This is the primary method for real-time terrain painting.
+   * @param canvas - Canvas containing heightmap data (grayscale)
+   * @param invalidateCollision - Whether to clear collision cache (default: false for performance during painting)
+   */
+  public updateHeightMapFromCanvas(canvas: HTMLCanvasElement, invalidateCollision = false): void {
+    if (!this.heightMap) {
+      // Create new canvas texture
+      this.heightMap = new THREE.CanvasTexture(canvas);
+      this.heightMap.wrapS = this.heightMap.wrapT = THREE.ClampToEdgeWrapping;
+      this.heightMap.magFilter = THREE.LinearFilter;
+      this.heightMap.minFilter = THREE.LinearMipMapLinearFilter;
+
+      // Recreate material with new texture
+      this.recreateMaterial();
+    } else if (this.heightMap instanceof THREE.CanvasTexture) {
+      // Update existing canvas texture
+      (this.heightMap as THREE.CanvasTexture).image = canvas;
+      this.heightMap.needsUpdate = true;
+    } else {
+      // Replace with canvas texture
+      this.heightMap.dispose();
+      this.heightMap = new THREE.CanvasTexture(canvas);
+      this.heightMap.wrapS = this.heightMap.wrapT = THREE.ClampToEdgeWrapping;
+      this.heightMap.needsUpdate = true;
+      this.recreateMaterial();
+    }
+
+    // Invalidate collision cache if requested
+    if (invalidateCollision) {
+      this.collisionCache.clear();
+      this.heightmapImageData = null;
+    }
+  }
+
+  /**
+   * Load a new heightmap from URL.
+   * @param url - URL to heightmap image
+   * @param invalidateCollision - Whether to clear collision cache (default: true)
+   */
+  public async loadHeightMap(url: string, invalidateCollision = true): Promise<void> {
+    const loader = new THREE.TextureLoader();
+    const texture = await loader.loadAsync(url);
+    this.setHeightMap(texture, invalidateCollision);
+    this.config.heightMapUrl = url;
+  }
+
+  /**
+   * Get the internal heightmap canvas for direct manipulation.
+   * Returns null if heightmap is not a CanvasTexture.
+   * For painting workflows, use this to get the canvas, paint on it,
+   * then call updateHeightMapFromCanvas() to apply changes.
+   */
+  public getHeightMapCanvas(): HTMLCanvasElement | null {
+    if (this.heightMap instanceof THREE.CanvasTexture) {
+      return this.heightMap.image as HTMLCanvasElement;
+    }
+    return null;
+  }
+
+  /**
+   * Create a writable heightmap canvas from current heightmap.
+   * Use this when you need to convert a loaded texture to an editable canvas.
+   * @param resolution - Canvas resolution (default: 1024)
+   */
+  public createEditableHeightMap(resolution = 1024): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = resolution;
+    canvas.height = resolution;
+    const ctx = canvas.getContext('2d')!;
+
+    // Copy existing heightmap if available
+    if (this.heightMap?.image) {
+      ctx.drawImage(this.heightMap.image as HTMLImageElement | HTMLCanvasElement, 0, 0, resolution, resolution);
+    } else {
+      // Fill with black (zero height)
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, resolution, resolution);
+    }
+
+    // Set this as the new heightmap
+    this.updateHeightMapFromCanvas(canvas);
+
+    return canvas;
+  }
+
+  /**
+   * Mark the heightmap as needing update (call after painting).
+   * This is more efficient than updateHeightMapFromCanvas when you've
+   * already painted directly to the canvas.
+   */
+  public markHeightMapDirty(): void {
+    if (this.heightMap) {
+      this.heightMap.needsUpdate = true;
+    }
+  }
+
+  // ============================================
+  // Collision API
+  // ============================================
+
+  /**
+   * Set the collision resolution for heightfield generation.
+   * @param resolution - 32, 64, or 128 subdivisions per chunk
+   */
+  public setCollisionResolution(resolution: CollisionResolution): void {
+    this.collisionResolution = resolution;
+    // Clear cache when resolution changes
+    this.collisionCache.clear();
+  }
+
+  /**
+   * Get the current collision resolution.
+   */
+  public getCollisionResolution(): CollisionResolution {
+    return this.collisionResolution;
+  }
+
+  /**
+   * Set a callback for chunk LOD changes (for dynamic collision).
+   * @param callback - Callback object with onChunkEnterLOD0/onChunkExitLOD0 methods
+   */
+  public setCollisionCallback(callback: ChunkCollisionCallback | null): void {
+    this.collisionCallback = callback;
+  }
+
+  /**
+   * Pre-compute collision data for all chunks and cache it.
+   * Call this after terrain init before starting gameplay.
+   * @returns Map of chunk keys to collision data
+   */
+  public async computeAllCollisionData(): Promise<Map<string, ChunkCollisionData>> {
+    if (!this.heightMap) {
+      throw new Error('Heightmap not loaded yet');
+    }
+
+    // Extract heightmap image data for sampling
+    await this._extractHeightmapImageData();
+
+    // Calculate number of chunks at highest LOD
+    const numChunks = Math.pow(2, this.config.levels - 1);
+    const chunkSize = this.config.worldSize / numChunks;
+    const halfWorld = this.config.worldSize / 2;
+
+    this.collisionCache.clear();
+
+    for (let z = 0; z < numChunks; z++) {
+      for (let x = 0; x < numChunks; x++) {
+        const data = this._generateChunkCollisionData(x, z, chunkSize, halfWorld);
+        const key = `${x}_${z}`;
+        this.collisionCache.set(key, data);
+      }
+    }
+
+    return this.collisionCache;
+  }
+
+  /**
+   * Get cached collision data for a specific chunk.
+   * @param x - Chunk X index
+   * @param z - Chunk Z index
+   * @returns Collision data or null if not in cache
+   */
+  public getChunkCollisionData(x: number, z: number): ChunkCollisionData | null {
+    const key = `${x}_${z}`;
+    return this.collisionCache.get(key) ?? null;
+  }
+
+  /**
+   * Get all cached collision data.
+   */
+  public getAllCollisionData(): Map<string, ChunkCollisionData> {
+    return this.collisionCache;
+  }
+
+  /**
+   * Sample height at a world position.
+   * @param worldX - World X coordinate
+   * @param worldZ - World Z coordinate
+   * @returns Height value, or 0 if heightmap not available
+   */
+  public getHeightAt(worldX: number, worldZ: number): number {
+    if (!this.heightmapImageData) return 0;
+
+    const halfWorld = this.config.worldSize / 2;
+    const u = (worldX + halfWorld) / this.config.worldSize;
+    const v = (worldZ + halfWorld) / this.config.worldSize;
+
+    if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
+
+    const imgX = Math.floor(u * (this.heightmapImageData.width - 1));
+    const imgY = Math.floor(v * (this.heightmapImageData.height - 1));
+    const idx = (imgY * this.heightmapImageData.width + imgX) * 4;
+
+    const heightNormalized = this.heightmapImageData.data[idx] / 255;
+    return heightNormalized * this.config.maxHeight;
+  }
+
+  /**
+   * Emit chunk enter LOD0 event (called by QuadtreeNode).
+   * @internal
+   */
+  public _emitChunkEnterLOD0(x: number, z: number): void {
+    const data = this.getChunkCollisionData(x, z);
+    if (data && this.collisionCallback?.onChunkEnterLOD0) {
+      this.collisionCallback.onChunkEnterLOD0(data);
+    }
+  }
+
+  /**
+   * Emit chunk exit LOD0 event (called by QuadtreeNode).
+   * @internal
+   */
+  public _emitChunkExitLOD0(x: number, z: number): void {
+    if (this.collisionCallback?.onChunkExitLOD0) {
+      this.collisionCallback.onChunkExitLOD0({ x, z });
+    }
+  }
+
+  /**
+   * Extract heightmap image data for CPU sampling.
+   * @internal
+   */
+  private async _extractHeightmapImageData(): Promise<void> {
+    if (this.heightmapImageData) return;
+    if (!this.heightMap) return;
+
+    // Get image from texture
+    const image = this.heightMap.image as HTMLImageElement | HTMLCanvasElement;
+    if (!image) return;
+
+    // Create canvas to extract image data
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width || 1024;
+    canvas.height = image.height || 1024;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(image, 0, 0);
+    this.heightmapImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }
+
+  /**
+   * Generate collision data for a single chunk.
+   * @internal
+   */
+  private _generateChunkCollisionData(
+    chunkX: number,
+    chunkZ: number,
+    chunkSize: number,
+    halfWorld: number
+  ): ChunkCollisionData {
+    const resolution = this.collisionResolution;
+    const rows = resolution + 1;
+    const cols = resolution + 1;
+    const heights = new Float32Array(rows * cols);
+
+    // World position of chunk center
+    const centerX = chunkX * chunkSize - halfWorld + chunkSize / 2;
+    const centerZ = chunkZ * chunkSize - halfWorld + chunkSize / 2;
+
+    // Sample heights
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const localX = (col / resolution - 0.5) * chunkSize;
+        const localZ = (row / resolution - 0.5) * chunkSize;
+
+        const worldX = centerX + localX;
+        const worldZ = centerZ + localZ;
+
+        const height = this.getHeightAt(worldX, worldZ);
+        heights[row * cols + col] = height;
+      }
+    }
+
+    return {
+      position: { x: centerX, y: 0, z: centerZ },
+      size: chunkSize,
+      index: { x: chunkX, z: chunkZ },
+      lodLevel: 0,
+      rows,
+      cols,
+      heights,
+      maxHeight: this.config.maxHeight,
+      scale: { x: chunkSize, y: 1, z: chunkSize }
+    };
+  }
+
   /**
    * Dispose the terrain and all resources.
    */
@@ -461,6 +791,9 @@ export class TerrainLOD extends THREE.Group {
       this.instancedMesh.dispose();
     }
     this.instancePool.clear();
+    this.collisionCache.clear();
+    this.collisionCallback = null;
+    this.heightmapImageData = null;
     this.sharedGeometry?.dispose();
     this.materialProvider.dispose?.();
     this.currentMaterial?.dispose();
