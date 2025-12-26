@@ -1,13 +1,13 @@
 {
     "name": "@interverse/three-terrain-lod",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "High-performance LOD terrain system for Three.js with quadtree-based chunking and swappable materials",
     "main": "dist/index.js",
-    "module": "dist/index.mjs",
+    "module": "dist/esm/index.js",
     "types": "dist/index.d.ts",
     "exports": {
         ".": {
-            "import": "./dist/index.mjs",
+            "import": "./dist/esm/index.js",
             "require": "./dist/index.js",
             "types": "./dist/index.d.ts"
         }
@@ -18,9 +18,9 @@
         "LICENSE"
     ],
     "scripts": {
-        "build": "tsc && tsc -p tsconfig.esm.json",
+        "build": "tsc && tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', '{\\\"type\\\":\\\"module\\\"}')\"",
         "build:cjs": "tsc",
-        "build:esm": "tsc -p tsconfig.esm.json",
+        "build:esm": "tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', '{\\\"type\\\":\\\"module\\\"}')\"",
         "clean": "rimraf dist",
         "prepublishOnly": "yarn clean && yarn build"
     },
