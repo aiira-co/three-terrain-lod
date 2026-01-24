@@ -23,6 +23,33 @@ yarn add @interverse/three-terrain-lod
 - 🔧 **TSL-based Default Material** - WebGPU-ready heightmap displacement
 - 🖌️ **HeightmapCompositor** - GPU-based non-destructive heightmap editing
 
+## Default Material
+
+The built-in `DefaultTerrainMaterial` provides a rich, TSL-based shader with the following features enabled by default:
+
+- **Slope-based Texturing**: Automatically applies rock texture to steep cliffs.
+- **Height-based Layering**: Blends between grass (low), rock (mid), and snow (high).
+- **Sobel Normal Calculation**: Computes normals on-the-fly from the heightmap.
+- **Triplanar Mapping**: (Coming soon) for vertical surfaces.
+
+### Customization
+
+You can access and modify the material parameters:
+
+```typescript
+// Access the default provider
+const provider = terrain.getMaterialProvider() as DefaultTerrainMaterial;
+
+// Configure thresholds
+provider.setSlopeThreshold(0.45); // Slope angle for rock (0-1)
+provider.setSlopeSoftness(0.2); // Blend softness
+provider.setSnowHeight(0.8); // Height for snow start (normalized 0-1)
+
+// Toggle visualizations
+provider.setShowChunkBorders(true);
+provider.setWireframe(true);
+```
+
 ## Installation
 
 ```bash
