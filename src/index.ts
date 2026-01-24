@@ -7,7 +7,10 @@ export {
   TerrainMaterialContext,
   ChunkInstanceData,
   InstancePool,
-  QuadtreeNode
+  QuadtreeNode,
+  HeightmapCompositor,
+  BrushData,
+  HeightmapCompositorConfig
 } from './core';
 
 // Material exports

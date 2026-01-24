@@ -11,6 +11,7 @@ yarn add @interverse/three-terrain-lod
 ```
 
 **Peer Dependencies:**
+
 - `three` >= 0.182.0
 
 ## Features
@@ -20,6 +21,7 @@ yarn add @interverse/three-terrain-lod
 - 🎨 **Swappable Materials** - Use custom materials (LayeredMaterial, etc.)
 - 📦 **Extends THREE.Group** - Add to any scene, no dependencies
 - 🔧 **TSL-based Default Material** - WebGPU-ready heightmap displacement
+- 🖌️ **HeightmapCompositor** - GPU-based non-destructive heightmap editing
 
 ## Installation
 
@@ -32,14 +34,14 @@ yarn add three-terrain-lod
 ## Quick Start
 
 ```typescript
-import { TerrainLOD } from '@interverse/three-terrain-lod';
+import { TerrainLOD } from "@interverse/three-terrain-lod";
 
 const terrain = new TerrainLOD({
-  heightMapUrl: 'terrain_heightmap.png',
+  heightMapUrl: "terrain_heightmap.png",
   worldSize: 1024,
   maxHeight: 100,
   levels: 6,
-  resolution: 64
+  resolution: 64,
 });
 
 scene.add(terrain);
@@ -55,16 +57,16 @@ function animate() {
 
 ```typescript
 interface TerrainConfig {
-  heightMapUrl?: string;      // URL to heightmap image
-  textureUrl?: string;        // URL to diffuse texture
-  worldSize?: number;         // Total terrain size (default: 2048)
-  maxHeight?: number;         // Maximum terrain height (default: 250)
-  levels?: number;            // LOD levels (default: 6)
-  lodDistanceRatio?: number;  // Higher = more detail (default: 2.0)
-  resolution?: number;        // Vertices per chunk side (default: 64)
-  wireframe?: boolean;        // Wireframe mode (default: false)
+  heightMapUrl?: string; // URL to heightmap image
+  textureUrl?: string; // URL to diffuse texture
+  worldSize?: number; // Total terrain size (default: 2048)
+  maxHeight?: number; // Maximum terrain height (default: 250)
+  levels?: number; // LOD levels (default: 6)
+  lodDistanceRatio?: number; // Higher = more detail (default: 2.0)
+  resolution?: number; // Vertices per chunk side (default: 64)
+  wireframe?: boolean; // Wireframe mode (default: false)
   showChunkBorders?: boolean; // Debug borders (default: false)
-  maxChunks?: number;         // Max concurrent chunks (default: 500)
+  maxChunks?: number; // Max concurrent chunks (default: 500)
 }
 ```
 
@@ -82,7 +84,7 @@ class MyTerrainMaterial implements TerrainMaterialProvider {
     // context.heightMap - The heightmap texture
     // context.maxHeight - Maximum terrain height
     // context.worldSize - Total terrain size
-    
+
     this.material = new THREE.MeshStandardMaterial({
       color: 0x44aa44
     });
@@ -109,7 +111,7 @@ terrain.resetMaterial();
 ### LayeredMaterial Integration Example
 
 ```typescript
-import { LayeredMaterial } from '@interverse/three-layered-material';
+import { LayeredMaterial } from "@interverse/three-layered-material";
 
 class LayeredTerrainProvider implements TerrainMaterialProvider {
   private layeredMaterial: LayeredMaterial;
@@ -118,21 +120,21 @@ class LayeredTerrainProvider implements TerrainMaterialProvider {
     this.layeredMaterial = new LayeredMaterial({
       layers: [
         {
-          name: 'Grass',
+          name: "Grass",
           map: { color: grassTexture },
-          scale: 0.5
+          scale: 0.5,
         },
         {
-          name: 'Rock',
+          name: "Rock",
           map: { color: rockTexture },
-          mask: { useSlope: true, slopeMin: 0.4, slopeMax: 0.8 }
+          mask: { useSlope: true, slopeMin: 0.4, slopeMax: 0.8 },
         },
         {
-          name: 'Snow',
+          name: "Snow",
           map: { color: snowTexture },
-          mask: { useHeight: true, heightMin: context.maxHeight * 0.7 }
-        }
-      ]
+          mask: { useHeight: true, heightMin: context.maxHeight * 0.7 },
+        },
+      ],
     });
     return this.layeredMaterial;
   }
@@ -147,21 +149,21 @@ class LayeredTerrainProvider implements TerrainMaterialProvider {
 
 ### TerrainLOD
 
-| Method | Description |
-|--------|-------------|
-| `update(camera)` | Update LOD based on camera position (call each frame) |
-| `setMaterialProvider(provider)` | Set a custom material provider |
-| `resetMaterial()` | Reset to the default built-in material |
-| `getMaterial()` | Get the current material |
-| `getHeightMap()` | Get the heightmap texture |
-| `getDiffuseTexture()` | Get the diffuse texture |
-| `setWireframe(enabled)` | Toggle wireframe rendering |
-| `setMaxHeight(height)` | Update maximum terrain height |
-| `setShowChunkBorders(enabled)` | Toggle debug chunk borders |
-| `setLODDistanceRatio(ratio)` | Adjust LOD distance ratio |
-| `getConfig()` | Get the current configuration |
-| `getStats()` | Get terrain statistics |
-| `dispose()` | Clean up all resources |
+| Method                          | Description                                           |
+| ------------------------------- | ----------------------------------------------------- |
+| `update(camera)`                | Update LOD based on camera position (call each frame) |
+| `setMaterialProvider(provider)` | Set a custom material provider                        |
+| `resetMaterial()`               | Reset to the default built-in material                |
+| `getMaterial()`                 | Get the current material                              |
+| `getHeightMap()`                | Get the heightmap texture                             |
+| `getDiffuseTexture()`           | Get the diffuse texture                               |
+| `setWireframe(enabled)`         | Toggle wireframe rendering                            |
+| `setMaxHeight(height)`          | Update maximum terrain height                         |
+| `setShowChunkBorders(enabled)`  | Toggle debug chunk borders                            |
+| `setLODDistanceRatio(ratio)`    | Adjust LOD distance ratio                             |
+| `getConfig()`                   | Get the current configuration                         |
+| `getStats()`                    | Get terrain statistics                                |
+| `dispose()`                     | Clean up all resources                                |
 
 ### TerrainMaterialProvider Interface
 
@@ -201,6 +203,82 @@ attribute vec3 instanceUVTransform; // (scale, offsetX, offsetY)
 void main() {
   vec2 globalUV = vUv * instanceUVTransform.x + instanceUVTransform.yz;
   // Sample heightmap with globalUV
+}
+```
+
+## HeightmapCompositor
+
+GPU-based non-destructive heightmap composition. Render brush stamps to a render target for real-time terrain editing.
+
+### Basic Usage
+
+```typescript
+import { HeightmapCompositor, BrushData } from "@interverse/three-terrain-lod";
+
+const compositor = new HeightmapCompositor({
+  resolution: 1024,
+  worldSize: 2048,
+});
+
+// Add a brush
+compositor.addBrush({
+  uuid: "mountain-1",
+  position: new THREE.Vector3(100, 0, 200),
+  rotation: new THREE.Euler(0, 0, 0),
+  scale: new THREE.Vector3(100, 1, 100),
+  alphaTexture: mountainBrushTexture,
+  blendMode: "max", // 'add' | 'max' | 'subtract'
+  falloff: 0.3,
+  inclineStrength: 1.5,
+  height: 50,
+  visible: true,
+});
+
+// In render loop
+if (compositor.needsUpdate()) {
+  compositor.compose(renderer);
+  terrain.setHeightMap(compositor.getOutputTexture());
+}
+```
+
+### Brush Management
+
+```typescript
+// Update existing brush
+compositor.updateBrush("mountain-1", { height: 75 });
+
+// Remove brush
+compositor.removeBrush("mountain-1");
+
+// Get all brushes
+const brushes = compositor.getAllBrushes();
+
+// Clear all
+compositor.clear();
+```
+
+### Blend Modes
+
+| Mode       | Description                           |
+| ---------- | ------------------------------------- |
+| `max`      | Keep highest value (mountains)        |
+| `add`      | Additive blending (cumulative height) |
+| `subtract` | Subtractive (canyons/craters)         |
+
+### BrushData Interface
+
+```typescript
+interface BrushData {
+  uuid: string;
+  position: THREE.Vector3; // World position (x, z)
+  rotation: THREE.Euler; // Rotation
+  scale: THREE.Vector3; // Scale factor
+  alphaTexture: THREE.Texture; // Grayscale brush stamp
+  blendMode: "add" | "max" | "subtract";
+  falloff: number; // Edge softness (0-1)
+  inclineStrength: number; // Power curve (1=linear)
+  height: number; // Max height contribution
+  visible: boolean;
 }
 ```
 
@@ -247,15 +325,15 @@ terrain.setCollisionCallback({
       chunk.rows - 1,
       chunk.cols - 1,
       chunk.heights,
-      chunk.scale
+      chunk.scale,
     );
     collider.setTranslation(chunk.position);
   },
-  
+
   onChunkExitLOD0(index) {
     // Chunk is no longer in LOD0 - remove collider
     physics.removeCollider(index.x, index.z);
-  }
+  },
 });
 ```
 
