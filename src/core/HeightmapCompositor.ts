@@ -250,6 +250,36 @@ export class HeightmapCompositor {
     }
 
     /**
+     * Read back heightmap data from GPU to CPU.
+     * WARNING: This is a slow operation (blocking read). Use sparingly (e.g., on mouse up).
+     * @param renderer - WebGL renderer
+     * @returns Float32Array containing height values (0-1)
+     */
+    readBackHeightMap(renderer: THREE.WebGLRenderer): Float32Array {
+        const width = this.config.resolution;
+        const height = this.config.resolution;
+        const buffer = new Float32Array(width * height * 4); // RGBA
+
+        // Store current state
+        const currentRenderTarget = renderer.getRenderTarget();
+
+        // Read from our target
+        renderer.setRenderTarget(this.renderTarget);
+        renderer.readRenderTargetPixels(this.renderTarget, 0, 0, width, height, buffer);
+
+        // Restore state
+        renderer.setRenderTarget(currentRenderTarget);
+
+        // Extract R channel (height)
+        const heights = new Float32Array(width * height);
+        for (let i = 0; i < width * height; i++) {
+            heights[i] = buffer[i * 4];
+        }
+
+        return heights;
+    }
+
+    /**
      * Get the render target for advanced use.
      */
     getRenderTarget(): THREE.WebGLRenderTarget {

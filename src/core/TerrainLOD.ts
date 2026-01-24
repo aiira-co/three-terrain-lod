@@ -529,6 +529,37 @@ export class TerrainLOD extends THREE.Group {
   }
 
   /**
+   * Set raw height data (CPU side) directly.
+   * Use this when heightmap is not a canvas/image (e.g. GPU render target).
+   * @param data - Float32Array of height values (0-1) or Uint8ClampedArray (0-255)
+   * @param width - Data width
+   * @param height - Data height
+   * @param invalidateCollision - Whether to clear collision cache (default: true)
+   */
+  public setRawHeightData(data: Float32Array | Uint8ClampedArray, width: number, height: number, invalidateCollision = true): void {
+    // Convert to ImageData compatible format if needed
+    if (data instanceof Float32Array) {
+      // Convert float 0-1 to byte 0-255
+      const buffer = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0; i < width * height; i++) {
+        const val = Math.floor(data[i] * 255);
+        const idx = i * 4;
+        buffer[idx] = val;     // R
+        buffer[idx + 1] = val; // G
+        buffer[idx + 2] = val; // B
+        buffer[idx + 3] = 255; // A
+      }
+      this.heightmapImageData = new ImageData(buffer, width, height);
+    } else {
+      this.heightmapImageData = new ImageData(data as any, width, height);
+    }
+
+    if (invalidateCollision) {
+      this.collisionCache.clear();
+    }
+  }
+
+  /**
    * Load a new heightmap from URL.
    * @param url - URL to heightmap image
    * @param invalidateCollision - Whether to clear collision cache (default: true)
