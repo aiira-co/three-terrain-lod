@@ -20,6 +20,8 @@ export interface TerrainConfig {
   levels?: number;
   /** LOD distance ratio - higher values split chunks sooner */
   lodDistanceRatio?: number;
+  /** LOD merge hysteresis multiplier (>1 reduces split/merge thrashing) */
+  lodHysteresis?: number;
   /** Base mesh resolution (vertices per side) */
   resolution?: number;
   /** Enable wireframe rendering */
@@ -28,6 +30,10 @@ export interface TerrainConfig {
   showChunkBorders?: boolean;
   /** Maximum number of concurrent chunks */
   maxChunks?: number;
+  /** Depth of vertical skirts at chunk borders to hide LOD cracks */
+  skirtDepth?: number;
+  /** Width of skirt blend from chunk edges (0-0.5 in local chunk UV) */
+  skirtWidth?: number;
 }
 
 /**
@@ -62,6 +68,10 @@ export interface TerrainMaterialContext {
   wireframe: boolean;
   /** Whether chunk borders should be shown */
   showChunkBorders: boolean;
+  /** Depth of vertical skirts at chunk borders to hide LOD cracks */
+  skirtDepth: number;
+  /** Width of skirt blend from chunk edges (0-0.5 in local chunk UV) */
+  skirtWidth: number;
 }
 
 /**
@@ -141,6 +151,7 @@ export interface ChunkInstanceData {
   uvScale: number;
   uvOffsetX: number;
   uvOffsetY: number;
+  level?: number;
 }
 
 // ============================================

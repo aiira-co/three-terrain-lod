@@ -41,12 +41,25 @@ export class TerrainLOD extends THREE.Group {
   private heightMap: THREE.Texture | null = null;
   private diffuseTexture: THREE.Texture | null = null;
   private isInitialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
+  private proceduralHeightMap: THREE.Texture | null = null;
+  private proceduralDiffuseTexture: THREE.Texture | null = null;
 
   private instancePool: InstancePool;
   private needsUpdate: boolean = false;
+  private visibleInstanceIds: Set<number> = new Set();
 
   // Instance attribute arrays
   private instanceUVTransforms: Float32Array;
+  private instanceEdgeSkirtMasks: Float32Array;
+  private readonly tempMatrix: THREE.Matrix4 = new THREE.Matrix4();
+  private readonly tempPosition: THREE.Vector3 = new THREE.Vector3();
+  private readonly tempScale: THREE.Vector3 = new THREE.Vector3();
+  private readonly tempQuaternion: THREE.Quaternion = new THREE.Quaternion();
+  private readonly hiddenMatrix: THREE.Matrix4 = new THREE.Matrix4().makeScale(0, 0, 0);
+  private readonly frustum: THREE.Frustum = new THREE.Frustum();
+  private readonly frustumProjectionMatrix: THREE.Matrix4 = new THREE.Matrix4();
+  private readonly chunkBoundsSphere: THREE.Sphere = new THREE.Sphere();
 
   // Material provider
   private materialProvider: TerrainMaterialProvider;
@@ -70,36 +83,59 @@ export class TerrainLOD extends THREE.Group {
       maxHeight: config.maxHeight ?? 250,
       levels: config.levels ?? 6,
       lodDistanceRatio: config.lodDistanceRatio ?? 2.0,
+      lodHysteresis: Math.max(1, config.lodHysteresis ?? 1.2),
       resolution: config.resolution ?? 64,
       wireframe: config.wireframe ?? false,
       showChunkBorders: config.showChunkBorders ?? false,
+      skirtDepth: config.skirtDepth ?? 1.0,
+      skirtWidth: config.skirtWidth ?? (1 / (config.resolution ?? 64)),
       maxChunks
     };
 
     this.instancePool = new InstancePool(maxChunks);
     this.instanceUVTransforms = new Float32Array(maxChunks * 3);
+    this.instanceEdgeSkirtMasks = new Float32Array(maxChunks * 4);
 
     // Create default material provider
     this.defaultMaterialProvider = new DefaultTerrainMaterial();
     this.materialProvider = this.defaultMaterialProvider;
 
-    this.init();
+    void this.init().catch(() => {
+      // Initialization errors are logged in init().
+    });
   }
 
-  private async init(): Promise<void> {
-    try {
-      await this.loadTextures();
-      this.createSharedGeometry();
-      this.createMaterial();
-      this.createInstancedMesh();
-
-      this.root = new QuadtreeNode(0, 0, this.config.worldSize, 0, this);
-      this.root.update();
-
-      this.isInitialized = true;
-    } catch (error) {
-      console.error('Failed to initialize TerrainLOD:', error);
+  /**
+   * Initialize terrain resources.
+   * Safe to call multiple times; concurrent calls share the same promise.
+   */
+  public init(): Promise<void> {
+    if (this.isInitialized) {
+      return Promise.resolve();
     }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = (async () => {
+      try {
+        await this.loadTextures();
+        this.createSharedGeometry();
+        this.createMaterial();
+        this.createInstancedMesh();
+
+        this.root = new QuadtreeNode(0, 0, this.config.worldSize, 0, this);
+        this.root.update();
+
+        this.isInitialized = true;
+      } catch (error) {
+        console.error('Failed to initialize TerrainLOD:', error);
+        this.initPromise = null;
+        throw error;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   private async loadTextures(): Promise<void> {
@@ -107,8 +143,10 @@ export class TerrainLOD extends THREE.Group {
 
     if (this.config.heightMapUrl) {
       this.heightMap = await loader.loadAsync(this.config.heightMapUrl);
+      this.proceduralHeightMap = null;
     } else {
       this.heightMap = this.generateProceduralHeightmap();
+      this.proceduralHeightMap = this.heightMap;
     }
     this.heightMap.wrapS = this.heightMap.wrapT = THREE.ClampToEdgeWrapping;
     this.heightMap.magFilter = THREE.LinearFilter;
@@ -116,8 +154,10 @@ export class TerrainLOD extends THREE.Group {
 
     if (this.config.textureUrl) {
       this.diffuseTexture = await loader.loadAsync(this.config.textureUrl);
+      this.proceduralDiffuseTexture = null;
     } else {
       this.diffuseTexture = this.generateProceduralDiffuse();
+      this.proceduralDiffuseTexture = this.diffuseTexture;
     }
     this.diffuseTexture.wrapS = this.diffuseTexture.wrapT = THREE.RepeatWrapping;
     this.diffuseTexture.repeat.set(16, 16);
@@ -214,7 +254,9 @@ export class TerrainLOD extends THREE.Group {
       worldSize: this.config.worldSize,
       resolution: this.config.resolution,
       wireframe: this.config.wireframe,
-      showChunkBorders: this.config.showChunkBorders
+      showChunkBorders: this.config.showChunkBorders,
+      skirtDepth: this.config.skirtDepth,
+      skirtWidth: this.config.skirtWidth
     };
 
     this.currentMaterial = this.materialProvider.createMaterial(context);
@@ -235,7 +277,12 @@ export class TerrainLOD extends THREE.Group {
     uvTransformAttr.setUsage(THREE.DynamicDrawUsage);
     this.instancedMesh.geometry.setAttribute('instanceUVTransform', uvTransformAttr);
 
+    const edgeSkirtAttr = new THREE.InstancedBufferAttribute(this.instanceEdgeSkirtMasks, 4);
+    edgeSkirtAttr.setUsage(THREE.DynamicDrawUsage);
+    this.instancedMesh.geometry.setAttribute('instanceEdgeSkirt', edgeSkirtAttr);
+
     this.instancedMesh.count = 0;
+    // Keep mesh-level culling disabled; per-chunk visibility is handled manually.
     this.instancedMesh.frustumCulled = false;
 
     this.add(this.instancedMesh);
@@ -244,6 +291,72 @@ export class TerrainLOD extends THREE.Group {
   // ============================================
   // Instance Management
   // ============================================
+
+  private writeChunkMatrix(id: number, data: ChunkInstanceData): void {
+    this.tempPosition.set(data.x, this.config.maxHeight * -0.4, data.z);
+    this.tempScale.set(data.size, 1, data.size);
+    this.tempMatrix.compose(this.tempPosition, this.tempQuaternion, this.tempScale);
+    this.instancedMesh!.setMatrixAt(id, this.tempMatrix);
+  }
+
+  private hideChunkMatrix(id: number): void {
+    this.instancedMesh!.setMatrixAt(id, this.hiddenMatrix);
+  }
+
+  private isChunkVisible(chunk: ChunkInstanceData): boolean {
+    const halfSize = chunk.size * 0.5;
+    const verticalHalfExtent = this.config.maxHeight * 0.5 + this.config.skirtDepth;
+    this.chunkBoundsSphere.center.set(chunk.x, this.config.maxHeight * 0.1, chunk.z);
+    this.chunkBoundsSphere.radius = Math.sqrt((halfSize * halfSize * 2) + (verticalHalfExtent * verticalHalfExtent));
+    return this.frustum.intersectsSphere(this.chunkBoundsSphere);
+  }
+
+  private updateFrustumVisibility(camera: THREE.Camera): void {
+    if (!this.instancedMesh) return;
+
+    this.frustumProjectionMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.frustumProjectionMatrix);
+
+    const entries = this.instancePool.getActiveEntries();
+    if (entries.length === 0) {
+      this.visibleInstanceIds.clear();
+      if (this.instancedMesh.count !== 0) {
+        this.instancedMesh.count = 0;
+      }
+      return;
+    }
+
+    const forceMatrixRefresh = this.needsUpdate;
+    let highestVisibleId = -1;
+    let matrixChanged = false;
+
+    for (const [id, chunk] of entries) {
+      const visible = this.isChunkVisible(chunk);
+      const wasVisible = this.visibleInstanceIds.has(id);
+
+      if (visible) {
+        highestVisibleId = Math.max(highestVisibleId, id);
+        if (!wasVisible || forceMatrixRefresh) {
+          this.writeChunkMatrix(id, chunk);
+          matrixChanged = true;
+        }
+        this.visibleInstanceIds.add(id);
+      } else {
+        if (wasVisible || forceMatrixRefresh) {
+          this.hideChunkMatrix(id);
+          matrixChanged = true;
+        }
+        this.visibleInstanceIds.delete(id);
+      }
+    }
+
+    if (this.instancedMesh.count !== highestVisibleId + 1) {
+      this.instancedMesh.count = highestVisibleId + 1;
+    }
+    if (matrixChanged) {
+      this.instancedMesh.instanceMatrix.needsUpdate = true;
+    }
+  }
 
   /**
    * Add a terrain chunk instance.
@@ -256,19 +369,19 @@ export class TerrainLOD extends THREE.Group {
     this.instancePool.setData(id, data);
 
     // Update instance matrix
-    const matrix = new THREE.Matrix4();
-    matrix.compose(
-      new THREE.Vector3(data.x, this.config.maxHeight * -0.4, data.z),
-      new THREE.Quaternion(),
-      new THREE.Vector3(data.size, 1, data.size)
-    );
-    this.instancedMesh!.setMatrixAt(id, matrix);
+    this.writeChunkMatrix(id, data);
 
     // Update UV transform
     const offset = id * 3;
     this.instanceUVTransforms[offset] = data.uvScale;
     this.instanceUVTransforms[offset + 1] = data.uvOffsetX;
     this.instanceUVTransforms[offset + 2] = data.uvOffsetY;
+
+    const edgeOffset = id * 4;
+    this.instanceEdgeSkirtMasks[edgeOffset] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 1] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 2] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 3] = 0;
 
     this.needsUpdate = true;
     return id;
@@ -284,9 +397,14 @@ export class TerrainLOD extends THREE.Group {
     this.instancePool.release(id);
 
     // Hide instance by setting scale to 0
-    const matrix = new THREE.Matrix4();
-    matrix.scale(new THREE.Vector3(0, 0, 0));
-    this.instancedMesh!.setMatrixAt(id, matrix);
+    this.hideChunkMatrix(id);
+    this.visibleInstanceIds.delete(id);
+
+    const edgeOffset = id * 4;
+    this.instanceEdgeSkirtMasks[edgeOffset] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 1] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 2] = 0;
+    this.instanceEdgeSkirtMasks[edgeOffset + 3] = 0;
 
     this.needsUpdate = true;
   }
@@ -301,18 +419,23 @@ export class TerrainLOD extends THREE.Group {
    * @param camera - The camera to use for LOD calculations
    */
   public update(camera: THREE.Camera): void {
-    if (this.isInitialized && this.root) {
+    if (this.isInitialized && this.root && this.instancedMesh) {
       setCurrentCamera(camera);
       this.root.update();
+      this.updateFrustumVisibility(camera);
 
-      if (this.needsUpdate && this.instancedMesh) {
-        const maxId = this.instancePool.getHighestActiveId();
-        this.instancedMesh.count = maxId + 1;
+      if (this.needsUpdate) {
+        this.updateEdgeSkirtMasks();
 
         this.instancedMesh.instanceMatrix.needsUpdate = true;
         const uvAttr = this.instancedMesh.geometry.getAttribute('instanceUVTransform');
         if (uvAttr) {
           (uvAttr as THREE.InstancedBufferAttribute).needsUpdate = true;
+        }
+
+        const edgeAttr = this.instancedMesh.geometry.getAttribute('instanceEdgeSkirt');
+        if (edgeAttr) {
+          (edgeAttr as THREE.InstancedBufferAttribute).needsUpdate = true;
         }
 
         this.needsUpdate = false;
@@ -376,6 +499,117 @@ export class TerrainLOD extends THREE.Group {
   public getUVTransformAttribute(): THREE.InstancedBufferAttribute | null {
     return this.instancedMesh?.geometry.getAttribute('instanceUVTransform') as THREE.InstancedBufferAttribute | null;
   }
+  public getEdgeSkirtAttribute(): THREE.InstancedBufferAttribute | null {
+    return this.instancedMesh?.geometry.getAttribute('instanceEdgeSkirt') as THREE.InstancedBufferAttribute | null;
+  }
+
+  private updateEdgeSkirtMasks(): void {
+    const entries = this.instancePool.getActiveEntries();
+    if (entries.length === 0) return;
+
+    const epsilon = 1e-4;
+    const edgeSamples = [0.1, 0.3, 0.5, 0.7, 0.9];
+    const maxLevel = this.config.levels - 1;
+    const halfWorld = this.config.worldSize * 0.5;
+    const levelChunkMaps = new Map<number, Map<string, [number, ChunkInstanceData]>>();
+
+    const toGridKey = (x: number, z: number, level: number): string => {
+      const divisions = Math.pow(2, level);
+      const cellSize = this.config.worldSize / divisions;
+      const normalizedX = (x + halfWorld) / cellSize;
+      const normalizedZ = (z + halfWorld) / cellSize;
+      const ix = Math.min(divisions - 1, Math.max(0, Math.floor(normalizedX)));
+      const iz = Math.min(divisions - 1, Math.max(0, Math.floor(normalizedZ)));
+      return `${ix},${iz}`;
+    };
+
+    for (const [id, chunk] of entries) {
+      const level = Math.max(0, Math.min(maxLevel, chunk.level ?? 0));
+      let mapForLevel = levelChunkMaps.get(level);
+      if (!mapForLevel) {
+        mapForLevel = new Map<string, [number, ChunkInstanceData]>();
+        levelChunkMaps.set(level, mapForLevel);
+      }
+      mapForLevel.set(toGridKey(chunk.x, chunk.z, level), [id, chunk]);
+    }
+
+    const findNeighborLevelAt = (x: number, z: number, selfId: number): number | null => {
+      const sampleX = Math.min(halfWorld - epsilon, Math.max(-halfWorld + epsilon, x));
+      const sampleZ = Math.min(halfWorld - epsilon, Math.max(-halfWorld + epsilon, z));
+
+      for (let level = maxLevel; level >= 0; level--) {
+        const mapForLevel = levelChunkMaps.get(level);
+        if (!mapForLevel) continue;
+        const hit = mapForLevel.get(toGridKey(sampleX, sampleZ, level));
+        if (hit && hit[0] !== selfId) {
+          return hit[1].level ?? 0;
+        }
+      }
+
+      return null;
+    };
+
+    const findMaxNeighborLevelOnEdge = (
+      x0: number,
+      z0: number,
+      x1: number,
+      z1: number,
+      selfId: number
+    ): number | null => {
+      let maxLevel: number | null = null;
+
+      for (const t of edgeSamples) {
+        const x = x0 + (x1 - x0) * t;
+        const z = z0 + (z1 - z0) * t;
+        const level = findNeighborLevelAt(x, z, selfId);
+        if (level !== null) {
+          maxLevel = maxLevel === null ? level : Math.max(maxLevel, level);
+        }
+      }
+
+      return maxLevel;
+    };
+
+    for (const [id, chunk] of entries) {
+      const half = chunk.size * 0.5;
+      const chunkLevel = chunk.level ?? 0;
+
+      const leftLevel = findMaxNeighborLevelOnEdge(
+        chunk.x - half - epsilon,
+        chunk.z - half,
+        chunk.x - half - epsilon,
+        chunk.z + half,
+        id
+      );
+      const rightLevel = findMaxNeighborLevelOnEdge(
+        chunk.x + half + epsilon,
+        chunk.z - half,
+        chunk.x + half + epsilon,
+        chunk.z + half,
+        id
+      );
+      const bottomLevel = findMaxNeighborLevelOnEdge(
+        chunk.x - half,
+        chunk.z - half - epsilon,
+        chunk.x + half,
+        chunk.z - half - epsilon,
+        id
+      );
+      const topLevel = findMaxNeighborLevelOnEdge(
+        chunk.x - half,
+        chunk.z + half + epsilon,
+        chunk.x + half,
+        chunk.z + half + epsilon,
+        id
+      );
+
+      const offset = id * 4;
+      this.instanceEdgeSkirtMasks[offset] = leftLevel !== null ? Math.max(0, leftLevel - chunkLevel) : 0;
+      this.instanceEdgeSkirtMasks[offset + 1] = rightLevel !== null ? Math.max(0, rightLevel - chunkLevel) : 0;
+      this.instanceEdgeSkirtMasks[offset + 2] = bottomLevel !== null ? Math.max(0, bottomLevel - chunkLevel) : 0;
+      this.instanceEdgeSkirtMasks[offset + 3] = topLevel !== null ? Math.max(0, topLevel - chunkLevel) : 0;
+    }
+  }
 
   private recreateMaterial(): void {
     if (!this.isInitialized || !this.heightMap) return;
@@ -387,7 +621,9 @@ export class TerrainLOD extends THREE.Group {
       worldSize: this.config.worldSize,
       resolution: this.config.resolution,
       wireframe: this.config.wireframe,
-      showChunkBorders: this.config.showChunkBorders
+      showChunkBorders: this.config.showChunkBorders,
+      skirtDepth: this.config.skirtDepth,
+      skirtWidth: this.config.skirtWidth
     };
 
     // Dispose old material
@@ -435,6 +671,14 @@ export class TerrainLOD extends THREE.Group {
   }
 
   /**
+   * Set LOD merge hysteresis multiplier.
+   * Values greater than 1 reduce split/merge thrashing near threshold boundaries.
+   */
+  public setLODHysteresis(multiplier: number): void {
+    this.config.lodHysteresis = Math.max(1, multiplier);
+  }
+
+  /**
    * Get the current configuration.
    */
   public getConfig(): ResolvedTerrainConfig {
@@ -470,10 +714,16 @@ export class TerrainLOD extends THREE.Group {
    */
   public setHeightMap(texture: THREE.Texture, invalidateCollision = true): void {
     if (this.heightMap && this.heightMap !== texture) {
+      if (this.heightMap === this.proceduralHeightMap) {
+        this.proceduralHeightMap = null;
+      }
       this.heightMap.dispose();
     }
 
     this.heightMap = texture;
+    if (texture !== this.proceduralHeightMap) {
+      this.proceduralHeightMap = null;
+    }
     texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.magFilter = THREE.LinearFilter;
     texture.minFilter = THREE.LinearMipMapLinearFilter;
@@ -502,6 +752,7 @@ export class TerrainLOD extends THREE.Group {
     if (!this.heightMap) {
       // Create new canvas texture
       this.heightMap = new THREE.CanvasTexture(canvas);
+      this.proceduralHeightMap = null;
       this.heightMap.wrapS = this.heightMap.wrapT = THREE.ClampToEdgeWrapping;
       this.heightMap.magFilter = THREE.LinearFilter;
       this.heightMap.minFilter = THREE.LinearMipMapLinearFilter;
@@ -514,8 +765,12 @@ export class TerrainLOD extends THREE.Group {
       this.heightMap.needsUpdate = true;
     } else {
       // Replace with canvas texture
+      if (this.heightMap === this.proceduralHeightMap) {
+        this.proceduralHeightMap = null;
+      }
       this.heightMap.dispose();
       this.heightMap = new THREE.CanvasTexture(canvas);
+      this.proceduralHeightMap = null;
       this.heightMap.wrapS = this.heightMap.wrapT = THREE.ClampToEdgeWrapping;
       this.heightMap.needsUpdate = true;
       this.recreateMaterial();
@@ -816,20 +1071,36 @@ export class TerrainLOD extends THREE.Group {
   public dispose(): void {
     if (this.root) {
       this.root.dispose();
+      this.root = null;
     }
     if (this.instancedMesh) {
       this.remove(this.instancedMesh);
       this.instancedMesh.dispose();
+      this.instancedMesh = null;
     }
     this.instancePool.clear();
+    this.visibleInstanceIds.clear();
     this.collisionCache.clear();
     this.collisionCallback = null;
     this.heightmapImageData = null;
     this.sharedGeometry?.dispose();
+    this.sharedGeometry = null;
     this.materialProvider.dispose?.();
     this.currentMaterial?.dispose();
+    this.currentMaterial = null;
+    if (this.proceduralHeightMap && this.proceduralHeightMap !== this.heightMap) {
+      this.proceduralHeightMap.dispose();
+    }
+    if (this.proceduralDiffuseTexture && this.proceduralDiffuseTexture !== this.diffuseTexture) {
+      this.proceduralDiffuseTexture.dispose();
+    }
     this.heightMap?.dispose();
     this.diffuseTexture?.dispose();
+    this.heightMap = null;
+    this.diffuseTexture = null;
+    this.proceduralHeightMap = null;
+    this.proceduralDiffuseTexture = null;
+    this.initPromise = null;
     this.isInitialized = false;
   }
 }

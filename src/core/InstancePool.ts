@@ -9,6 +9,7 @@ export class InstancePool {
   private freeIds: number[] = [];
   private nextId: number = 0;
   private maxInstances: number;
+  private highestActiveId: number = -1;
 
   constructor(maxInstances: number) {
     this.maxInstances = maxInstances;
@@ -36,6 +37,13 @@ export class InstancePool {
   release(id: number): void {
     if (this.activeInstances.delete(id)) {
       this.freeIds.push(id);
+      if (id === this.highestActiveId) {
+        let nextHighest = -1;
+        for (const activeId of this.activeInstances.keys()) {
+          if (activeId > nextHighest) nextHighest = activeId;
+        }
+        this.highestActiveId = nextHighest;
+      }
     }
   }
 
@@ -46,6 +54,9 @@ export class InstancePool {
    */
   setData(id: number, data: ChunkInstanceData): void {
     this.activeInstances.set(id, data);
+    if (id > this.highestActiveId) {
+      this.highestActiveId = id;
+    }
   }
 
   /**
@@ -58,12 +69,18 @@ export class InstancePool {
   }
 
   /**
+   * Get all active instance entries as [id, data].
+   */
+  getActiveEntries(): Array<[number, ChunkInstanceData]> {
+    return Array.from(this.activeInstances.entries());
+  }
+
+  /**
    * Get the highest active instance ID.
    * Used to set the instanced mesh count.
    */
   getHighestActiveId(): number {
-    if (this.activeInstances.size === 0) return -1;
-    return Math.max(...Array.from(this.activeInstances.keys()));
+    return this.highestActiveId;
   }
 
   /**
@@ -84,5 +101,6 @@ export class InstancePool {
     this.activeInstances.clear();
     this.freeIds = [];
     this.nextId = 0;
+    this.highestActiveId = -1;
   }
 }

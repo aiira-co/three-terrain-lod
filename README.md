@@ -1,6 +1,6 @@
 # @interverse/three-terrain-lod
 
-High-performance LOD terrain system for Three.js with quadtree-based chunking and **swappable materials**.
+High-performance LOD terrain system for Three.js with quadtree-based chunking, **swappable materials**, and **real-time editing**.
 
 ## 📦 Installation
 
@@ -19,9 +19,13 @@ yarn add @interverse/three-terrain-lod
 - 🏔️ **Quadtree LOD** - Automatic level-of-detail based on camera distance
 - ⚡ **Instanced Rendering** - Single draw call for all terrain chunks
 - 🎨 **Swappable Materials** - Use custom materials (LayeredMaterial, etc.)
-- 📦 **Extends THREE.Group** - Add to any scene, no dependencies
 - 🔧 **TSL-based Default Material** - WebGPU-ready heightmap displacement
-- 🖌️ **HeightmapCompositor** - GPU-based non-destructive heightmap editing
+- 🖌️ **HeightmapCompositor** - GPU-based non-destructive terrain painting
+- 🎮 **Physics Integration** - Heightfield collision data for any physics engine
+- 📝 **Real-time Editing** - Dynamic heightmap updates via canvas or raw data
+- 🔗 **Edge Skirts** - Seamless LOD transitions without cracks
+- 🎯 **LOD Hysteresis** - Prevents thrashing at chunk boundaries
+- 📦 **Extends THREE.Group** - Add to any scene, no dependencies
 
 ## Default Material
 

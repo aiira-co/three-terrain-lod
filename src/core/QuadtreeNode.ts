@@ -45,16 +45,25 @@ export class QuadtreeNode {
   update(): void {
     const distance = this.getDistanceFromCamera();
     const config = this.terrain.getConfig();
-
+    const canSplit = this.level < config.levels - 1;
     const splitDistance = this.size * config.lodDistanceRatio;
-    const shouldSplit = distance < splitDistance && this.level < config.levels - 1;
+    const mergeDistance = splitDistance * Math.max(1, config.lodHysteresis);
 
-    if (shouldSplit) {
-      if (this.isLeaf) this.split();
-      this.children.forEach(child => child.update());
-    } else {
-      if (!this.isLeaf) this.merge();
+    if (this.isLeaf) {
+      if (canSplit && distance < splitDistance) {
+        this.split();
+        this.children.forEach(child => child.update());
+      } else if (this.instanceId === -1) {
+        this.registerInstance();
+      }
+      return;
+    }
+
+    if (distance > mergeDistance) {
+      this.merge();
       if (this.instanceId === -1) this.registerInstance();
+    } else {
+      this.children.forEach(child => child.update());
     }
   }
 
@@ -88,7 +97,8 @@ export class QuadtreeNode {
       size: this.size,
       uvScale: uvTransform.scale,
       uvOffsetX: uvTransform.offsetX,
-      uvOffsetY: uvTransform.offsetY
+      uvOffsetY: uvTransform.offsetY,
+      level: this.level
     });
   }
 

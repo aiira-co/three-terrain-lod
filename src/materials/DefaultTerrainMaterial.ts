@@ -21,6 +21,8 @@ export interface TerrainMaterialNodes {
   slopeThreshold: UniformNode<number> | null;
   slopeSoftness: UniformNode<number> | null;
   snowHeight: UniformNode<number> | null;
+  skirtDepth: UniformNode<number> | null;
+  skirtWidth: UniformNode<number> | null;
 }
 
 /**
@@ -49,6 +51,8 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
   private slopeThresholdNode: UniformNode<number> | null = null;
   private slopeSoftnessNode: UniformNode<number> | null = null;
   private snowHeightNode: UniformNode<number> | null = null;
+  private skirtDepthNode: UniformNode<number> | null = null;
+  private skirtWidthNode: UniformNode<number> | null = null;
   private context: TerrainMaterialContext | null = null;
 
   /**
@@ -75,12 +79,23 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     this.slopeSoftnessNode = uniform(0.25);   // Blend softness
     this.snowHeightNode = uniform(0.75);      // Height where snow starts (0-1)
 
+    this.skirtDepthNode = uniform(Math.max(0, context.skirtDepth));
+    this.skirtWidthNode = uniform(Math.max(0.0001, Math.min(0.49, context.skirtWidth)));
+
     this.showChunkBordersNode = uniform(context.showChunkBorders ? 1.0 : 0.0);
 
     const material = new MeshPhysicalNodeMaterial();
+    const heightMapImage = context.heightMap.image as { width?: number; height?: number } | undefined;
+    const heightMapWidth = (typeof heightMapImage?.width === 'number' && heightMapImage.width > 0)
+      ? heightMapImage.width
+      : (context.resolution + 1);
+    const heightMapHeight = (typeof heightMapImage?.height === 'number' && heightMapImage.height > 0)
+      ? heightMapImage.height
+      : (context.resolution + 1);
 
     // Per-instance UV transform using instanceIndex
     const instUVTransform = attribute('instanceUVTransform', 'vec3');
+    const instEdgeSkirt = attribute('instanceEdgeSkirt', 'vec4');
     const instUVScale = instUVTransform.x;
     const instUVOffset = vec2(instUVTransform.y, instUVTransform.z);
 
@@ -95,14 +110,29 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
 
     // Vertex displacement
     const displacement = vec3(0, 1, 0).mul(height.mul(this.maxHeightNode));
-    material.positionNode = positionLocal.add(displacement);
+
+    // Skirt offset near tile borders to hide LOD cracks between neighbors
+    const skirtInner = this.skirtWidthNode!.mul(float(0.65));
+    const oneMinusSkirtUVX = float(1.0).sub(uvNode.x);
+    const oneMinusSkirtUVY = float(1.0).sub(uvNode.y);
+
+    const leftSkirt = float(1.0).sub(smoothstep(skirtInner, this.skirtWidthNode!, uvNode.x)).mul(instEdgeSkirt.x);
+    const rightSkirt = float(1.0).sub(smoothstep(skirtInner, this.skirtWidthNode!, oneMinusSkirtUVX)).mul(instEdgeSkirt.y);
+    const bottomSkirt = float(1.0).sub(smoothstep(skirtInner, this.skirtWidthNode!, uvNode.y)).mul(instEdgeSkirt.z);
+    const topSkirt = float(1.0).sub(smoothstep(skirtInner, this.skirtWidthNode!, oneMinusSkirtUVY)).mul(instEdgeSkirt.w);
+
+    const skirtMask = clamp(leftSkirt.add(rightSkirt).add(bottomSkirt).add(topSkirt), 0.0, 4.0);
+    const skirtOffset = vec3(0, this.skirtDepthNode!.mul(skirtMask).negate(), 0);
+
+    material.positionNode = positionLocal.add(displacement).add(skirtOffset);
 
     // Calculate normal for slope detection (do this first)
     const normalNode = this.createTerrainNormalSobel(
       this.heightMapNode!,
       globalUV,
       this.maxHeightNode!,
-      context.resolution,
+      heightMapWidth,
+      heightMapHeight,
       context.worldSize
     );
     material.normalNode = normalNode;
@@ -159,9 +189,9 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     // ===== CHUNK BORDER VISUALIZATION =====
     const maxUV1 = uvNode.x.max(uvNode.y);
     const border1 = maxUV1.step(0.98);
-    const oneMinusUVX = float(1.0).sub(uvNode.x);
-    const oneMinusUVY = float(1.0).sub(uvNode.y);
-    const maxUV2 = oneMinusUVX.max(oneMinusUVY);
+    const oneMinusBorderUVX = float(1.0).sub(uvNode.x);
+    const oneMinusBorderUVY = float(1.0).sub(uvNode.y);
+    const maxUV2 = oneMinusBorderUVX.max(oneMinusBorderUVY);
     const border2 = maxUV2.step(0.98);
     const borderTotal = border1.add(border2);
     const borderColor = vec3(1.0, 1.0, 0.0);
@@ -237,6 +267,24 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
   }
 
   /**
+   * Set skirt depth in world units.
+   */
+  setSkirtDepth(depth: number): void {
+    if (this.skirtDepthNode) {
+      this.skirtDepthNode.value = Math.max(0, depth);
+    }
+  }
+
+  /**
+   * Set skirt width in local chunk UV space (0-0.5).
+   */
+  setSkirtWidth(width: number): void {
+    if (this.skirtWidthNode) {
+      this.skirtWidthNode.value = Math.max(0.0001, Math.min(0.49, width));
+    }
+  }
+
+  /**
    * Get all uniform nodes for external customization.
    */
   getNodes(): TerrainMaterialNodes {
@@ -251,7 +299,9 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
       colorRock: this.colorRockNode,
       slopeThreshold: this.slopeThresholdNode,
       slopeSoftness: this.slopeSoftnessNode,
-      snowHeight: this.snowHeightNode
+      snowHeight: this.snowHeightNode,
+      skirtDepth: this.skirtDepthNode,
+      skirtWidth: this.skirtWidthNode
     };
   }
 
@@ -270,28 +320,32 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     heightMapNode: Node,
     globalUV: Node,
     maxHeightNode: UniformNode<number>,
-    resolution: number,
+    heightMapWidth: number,
+    heightMapHeight: number,
     worldSize: number
   ): Node {
     return Fn(() => {
-      const texelSize = float(1.0 / resolution).toVar();
-      const worldStep = float(worldSize / resolution).toVar();
+      const texelSizeX = float(1.0 / heightMapWidth).toVar();
+      const texelSizeY = float(1.0 / heightMapHeight).toVar();
+      const worldStepX = float(worldSize / heightMapWidth).toVar();
+      const worldStepZ = float(worldSize / heightMapHeight).toVar();
 
-      const hTL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize.negate(), texelSize.negate()))).r.toVar();
-      const hTC = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSize.negate()))).r.toVar();
-      const hTR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize, texelSize.negate()))).r.toVar();
-      const hCL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize.negate(), 0))).r.toVar();
-      const hCR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize, 0))).r.toVar();
-      const hBL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize.negate(), texelSize))).r.toVar();
-      const hBC = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSize))).r.toVar();
-      const hBR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSize, texelSize))).r.toVar();
+      const hTL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), texelSizeY.negate()))).r.toVar();
+      const hTC = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSizeY.negate()))).r.toVar();
+      const hTR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, texelSizeY.negate()))).r.toVar();
+      const hCL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), 0))).r.toVar();
+      const hCR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, 0))).r.toVar();
+      const hBL = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), texelSizeY))).r.toVar();
+      const hBC = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSizeY))).r.toVar();
+      const hBR = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, texelSizeY))).r.toVar();
 
       const sobelX = hTR.add(hCR.mul(2)).add(hBR).sub(hTL.add(hCL.mul(2)).add(hBL)).toVar();
       const sobelZ = hBL.add(hBC.mul(2)).add(hBR).sub(hTL.add(hTC.mul(2)).add(hTR)).toVar();
 
-      const strength = maxHeightNode.div(worldStep).toVar();
-      const dx = sobelX.mul(strength).toVar();
-      const dz = sobelZ.mul(strength).toVar();
+      const strengthX = maxHeightNode.div(worldStepX).toVar();
+      const strengthZ = maxHeightNode.div(worldStepZ).toVar();
+      const dx = sobelX.mul(strengthX).toVar();
+      const dz = sobelZ.mul(strengthZ).toVar();
 
       const normal = vec3(dx.negate(), 1, dz.negate()).toVar();
       return normalize(normal);
