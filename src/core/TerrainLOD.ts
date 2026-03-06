@@ -89,6 +89,9 @@ export class TerrainLOD extends THREE.Group {
       showChunkBorders: config.showChunkBorders ?? false,
       skirtDepth: config.skirtDepth ?? 1.0,
       skirtWidth: config.skirtWidth ?? (1 / (config.resolution ?? 64)),
+      normalStrength: Math.max(0, config.normalStrength ?? 1.0),
+      heightSmoothing: Math.min(1, Math.max(0, config.heightSmoothing ?? 0.0)),
+      heightSmoothingSpread: Math.max(0.25, config.heightSmoothingSpread ?? 1.5),
       maxChunks
     };
 
@@ -256,7 +259,10 @@ export class TerrainLOD extends THREE.Group {
       wireframe: this.config.wireframe,
       showChunkBorders: this.config.showChunkBorders,
       skirtDepth: this.config.skirtDepth,
-      skirtWidth: this.config.skirtWidth
+      skirtWidth: this.config.skirtWidth,
+      normalStrength: this.config.normalStrength,
+      heightSmoothing: this.config.heightSmoothing,
+      heightSmoothingSpread: this.config.heightSmoothingSpread
     };
 
     this.currentMaterial = this.materialProvider.createMaterial(context);
@@ -623,7 +629,10 @@ export class TerrainLOD extends THREE.Group {
       wireframe: this.config.wireframe,
       showChunkBorders: this.config.showChunkBorders,
       skirtDepth: this.config.skirtDepth,
-      skirtWidth: this.config.skirtWidth
+      skirtWidth: this.config.skirtWidth,
+      normalStrength: this.config.normalStrength,
+      heightSmoothing: this.config.heightSmoothing,
+      heightSmoothingSpread: this.config.heightSmoothingSpread
     };
 
     // Dispose old material
@@ -652,6 +661,31 @@ export class TerrainLOD extends THREE.Group {
   public setMaxHeight(height: number): void {
     this.config.maxHeight = height;
     this.materialProvider.setMaxHeight?.(height);
+  }
+
+  /**
+   * Set terrain normal intensity multiplier.
+   */
+  public setNormalStrength(strength: number): void {
+    this.config.normalStrength = Math.max(0, strength);
+    this.materialProvider.setNormalStrength?.(this.config.normalStrength);
+  }
+
+  /**
+   * Set displacement smoothing blend.
+   * 0 = raw heightmap, 1 = filtered heightmap.
+   */
+  public setHeightSmoothing(amount: number): void {
+    this.config.heightSmoothing = Math.min(1, Math.max(0, amount));
+    this.materialProvider.setHeightSmoothing?.(this.config.heightSmoothing);
+  }
+
+  /**
+   * Set displacement smoothing spread in texels.
+   */
+  public setHeightSmoothingSpread(spread: number): void {
+    this.config.heightSmoothingSpread = Math.max(0.25, spread);
+    this.materialProvider.setHeightSmoothingSpread?.(this.config.heightSmoothingSpread);
   }
 
   /**
@@ -1104,3 +1138,4 @@ export class TerrainLOD extends THREE.Group {
     this.isInitialized = false;
   }
 }
+

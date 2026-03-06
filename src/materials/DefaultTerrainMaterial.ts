@@ -3,8 +3,11 @@ import {
   texture, uv, uniform, vec3, vec2, vec4, mix, mul, add,
   positionLocal, float, step, normalize, Fn, attribute, smoothstep, pow, abs, clamp
 } from 'three/tsl';
-import { MeshPhysicalNodeMaterial, Node, TextureNode, UniformNode } from 'three/webgpu';
+import { MeshPhysicalNodeMaterial, TextureNode } from 'three/webgpu';
 import { TerrainMaterialProvider, TerrainMaterialContext } from '../core/types';
+
+type Node = any;
+type UniformNode<T = any> = any;
 
 /**
  * Nodes exposed for external modification.
@@ -23,6 +26,9 @@ export interface TerrainMaterialNodes {
   snowHeight: UniformNode<number> | null;
   skirtDepth: UniformNode<number> | null;
   skirtWidth: UniformNode<number> | null;
+  normalStrength: UniformNode<number> | null;
+  heightSmoothing: UniformNode<number> | null;
+  heightSmoothingSpread: UniformNode<number> | null;
 }
 
 /**
@@ -53,6 +59,9 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
   private snowHeightNode: UniformNode<number> | null = null;
   private skirtDepthNode: UniformNode<number> | null = null;
   private skirtWidthNode: UniformNode<number> | null = null;
+  private normalStrengthNode: UniformNode<number> | null = null;
+  private heightSmoothingNode: UniformNode<number> | null = null;
+  private heightSmoothingSpreadNode: UniformNode<number> | null = null;
   private context: TerrainMaterialContext | null = null;
 
   /**
@@ -81,6 +90,9 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
 
     this.skirtDepthNode = uniform(Math.max(0, context.skirtDepth));
     this.skirtWidthNode = uniform(Math.max(0.0001, Math.min(0.49, context.skirtWidth)));
+    this.normalStrengthNode = uniform(Math.max(0, context.normalStrength));
+    this.heightSmoothingNode = uniform(Math.min(1, Math.max(0, context.heightSmoothing)));
+    this.heightSmoothingSpreadNode = uniform(Math.max(0.25, context.heightSmoothingSpread));
 
     this.showChunkBordersNode = uniform(context.showChunkBorders ? 1.0 : 0.0);
 
@@ -94,8 +106,8 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
       : (context.resolution + 1);
 
     // Per-instance UV transform using instanceIndex
-    const instUVTransform = attribute('instanceUVTransform', 'vec3');
-    const instEdgeSkirt = attribute('instanceEdgeSkirt', 'vec4');
+    const instUVTransform: any = attribute('instanceUVTransform', 'vec3');
+    const instEdgeSkirt: any = attribute('instanceEdgeSkirt', 'vec4');
     const instUVScale = instUVTransform.x;
     const instUVOffset = vec2(instUVTransform.y, instUVTransform.z);
 
@@ -104,9 +116,16 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     const scaledUV = uvNode.mul(vec2(instUVScale, instUVScale));
     const globalUV = scaledUV.add(instUVOffset);
 
-    // Sample heightmap
-    const heightData = texture(this.heightMapNode as TextureNode, globalUV);
-    const height = heightData.r;
+    // Sample and optionally smooth heightmap for displacement
+    const rawHeight = texture(this.heightMapNode as TextureNode, globalUV).r;
+    const filteredHeight = this.createFilteredHeight(
+      this.heightMapNode!,
+      globalUV,
+      heightMapWidth,
+      heightMapHeight,
+      this.heightSmoothingSpreadNode!
+    );
+    const height = mix(rawHeight, filteredHeight, this.heightSmoothingNode!);
 
     // Vertex displacement
     const displacement = vec3(0, 1, 0).mul(height.mul(this.maxHeightNode));
@@ -133,7 +152,8 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
       this.maxHeightNode!,
       heightMapWidth,
       heightMapHeight,
-      context.worldSize
+      context.worldSize,
+      this.normalStrengthNode!
     );
     material.normalNode = normalNode;
 
@@ -196,7 +216,7 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     const borderTotal = border1.add(border2);
     const borderColor = vec3(1.0, 1.0, 0.0);
     const borderIntensity = borderTotal.mul(0.3).mul(this.showChunkBordersNode!);
-    finalColor = mix(finalColor, borderColor, borderIntensity);
+    finalColor = mix(finalColor as any, borderColor as any, borderIntensity as any) as any;
 
     material.colorNode = vec4(finalColor.x, finalColor.y, finalColor.z, float(1.0));
     material.wireframe = context.wireframe;
@@ -224,6 +244,33 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
   setMaxHeight(height: number): void {
     if (this.maxHeightNode) {
       this.maxHeightNode.value = height;
+    }
+  }
+
+  /**
+   * Set terrain normal strength.
+   */
+  setNormalStrength(strength: number): void {
+    if (this.normalStrengthNode) {
+      this.normalStrengthNode.value = Math.max(0, strength);
+    }
+  }
+
+  /**
+   * Set displacement smoothing blend.
+   */
+  setHeightSmoothing(amount: number): void {
+    if (this.heightSmoothingNode) {
+      this.heightSmoothingNode.value = Math.min(1, Math.max(0, amount));
+    }
+  }
+
+  /**
+   * Set displacement smoothing spread in texels.
+   */
+  setHeightSmoothingSpread(spread: number): void {
+    if (this.heightSmoothingSpreadNode) {
+      this.heightSmoothingSpreadNode.value = Math.max(0.25, spread);
     }
   }
 
@@ -301,7 +348,10 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
       slopeSoftness: this.slopeSoftnessNode,
       snowHeight: this.snowHeightNode,
       skirtDepth: this.skirtDepthNode,
-      skirtWidth: this.skirtWidthNode
+      skirtWidth: this.skirtWidthNode,
+      normalStrength: this.normalStrengthNode,
+      heightSmoothing: this.heightSmoothingNode,
+      heightSmoothingSpread: this.heightSmoothingSpreadNode
     };
   }
 
@@ -313,6 +363,33 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     this.material = null;
   }
 
+  private createFilteredHeight(
+    heightMapNode: Node,
+    globalUV: Node,
+    heightMapWidth: number,
+    heightMapHeight: number,
+    spreadNode: UniformNode<number>
+  ): Node {
+    return Fn(() => {
+      const texelSizeX = float(1.0 / heightMapWidth).mul(spreadNode).toVar();
+      const texelSizeY = float(1.0 / heightMapHeight).mul(spreadNode).toVar();
+
+      const hC = texture(heightMapNode as TextureNode, globalUV).r.toVar();
+      const hN = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSizeY.negate()))).r.toVar();
+      const hS = texture(heightMapNode as TextureNode, globalUV.add(vec2(0, texelSizeY))).r.toVar();
+      const hE = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, 0))).r.toVar();
+      const hW = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), 0))).r.toVar();
+      const hNE = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, texelSizeY.negate()))).r.toVar();
+      const hNW = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), texelSizeY.negate()))).r.toVar();
+      const hSE = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX, texelSizeY))).r.toVar();
+      const hSW = texture(heightMapNode as TextureNode, globalUV.add(vec2(texelSizeX.negate(), texelSizeY))).r.toVar();
+
+      const cardinals = hN.add(hS).add(hE).add(hW).mul(2.0).toVar();
+      const diagonals = hNE.add(hNW).add(hSE).add(hSW).toVar();
+      return hC.mul(4.0).add(cardinals).add(diagonals).div(16.0);
+    })();
+  }
+
   /**
    * Create terrain normals using Sobel filter.
    */
@@ -322,9 +399,11 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     maxHeightNode: UniformNode<number>,
     heightMapWidth: number,
     heightMapHeight: number,
-    worldSize: number
+    worldSize: number,
+    normalStrengthNode: UniformNode<number>
   ): Node {
     return Fn(() => {
+      // Use unnormalized Sobel strength to preserve the terrain slope response used by prior releases.
       const texelSizeX = float(1.0 / heightMapWidth).toVar();
       const texelSizeY = float(1.0 / heightMapHeight).toVar();
       const worldStepX = float(worldSize / heightMapWidth).toVar();
@@ -342,8 +421,9 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
       const sobelX = hTR.add(hCR.mul(2)).add(hBR).sub(hTL.add(hCL.mul(2)).add(hBL)).toVar();
       const sobelZ = hBL.add(hBC.mul(2)).add(hBR).sub(hTL.add(hTC.mul(2)).add(hTR)).toVar();
 
-      const strengthX = maxHeightNode.div(worldStepX).toVar();
-      const strengthZ = maxHeightNode.div(worldStepZ).toVar();
+      const strengthX = maxHeightNode.mul(normalStrengthNode).div(worldStepX).toVar();
+      const strengthZ = maxHeightNode.mul(normalStrengthNode).div(worldStepZ).toVar();
+
       const dx = sobelX.mul(strengthX).toVar();
       const dz = sobelZ.mul(strengthZ).toVar();
 
@@ -352,3 +432,7 @@ export class DefaultTerrainMaterial implements TerrainMaterialProvider {
     })();
   }
 }
+
+
+
+

@@ -34,6 +34,12 @@ export interface TerrainConfig {
   skirtDepth?: number;
   /** Width of skirt blend from chunk edges (0-0.5 in local chunk UV) */
   skirtWidth?: number;
+  /** Terrain normal intensity multiplier (0 = flat shading, 1 = physically scaled) */
+  normalStrength?: number;
+  /** Blend factor between raw and filtered displacement height (0-1) */
+  heightSmoothing?: number;
+  /** Filter spread in texels used for displacement smoothing */
+  heightSmoothingSpread?: number;
 }
 
 /**
@@ -72,6 +78,12 @@ export interface TerrainMaterialContext {
   skirtDepth: number;
   /** Width of skirt blend from chunk edges (0-0.5 in local chunk UV) */
   skirtWidth: number;
+  /** Terrain normal intensity multiplier (0 = flat shading, 1 = physically scaled) */
+  normalStrength: number;
+  /** Blend factor between raw and filtered displacement height (0-1) */
+  heightSmoothing: number;
+  /** Filter spread in texels used for displacement smoothing */
+  heightSmoothingSpread: number;
 }
 
 /**
@@ -118,6 +130,24 @@ export interface TerrainMaterialProvider {
    * @param height - New max height value
    */
   setMaxHeight?(height: number): void;
+
+  /**
+   * Called when terrain normal strength changes.
+   * @param strength - Normal intensity multiplier
+   */
+  setNormalStrength?(strength: number): void;
+
+  /**
+   * Called when height smoothing blend changes.
+   * @param amount - 0 = raw height, 1 = filtered height
+   */
+  setHeightSmoothing?(amount: number): void;
+
+  /**
+   * Called when height smoothing spread changes.
+   * @param spread - Filter spread in texels
+   */
+  setHeightSmoothingSpread?(spread: number): void;
 
   /**
    * Called when chunk border visibility changes.

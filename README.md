@@ -48,6 +48,7 @@ const provider = terrain.getMaterialProvider() as DefaultTerrainMaterial;
 provider.setSlopeThreshold(0.45); // Slope angle for rock (0-1)
 provider.setSlopeSoftness(0.2); // Blend softness
 provider.setSnowHeight(0.8); // Height for snow start (normalized 0-1)
+provider.setNormalStrength(1.0); // Terrain normal intensity
 
 // Toggle visualizations
 provider.setShowChunkBorders(true);
@@ -98,6 +99,7 @@ interface TerrainConfig {
   wireframe?: boolean; // Wireframe mode (default: false)
   showChunkBorders?: boolean; // Debug borders (default: false)
   maxChunks?: number; // Max concurrent chunks (default: 500)
+  normalStrength?: number; // Terrain normal intensity (default: 1.0)
 }
 ```
 
@@ -203,6 +205,7 @@ interface TerrainMaterialProvider {
   createMaterial(context: TerrainMaterialContext): THREE.Material;
   setWireframe?(enabled: boolean): void;
   setMaxHeight?(height: number): void;
+  setNormalStrength?(strength: number): void;
   setShowChunkBorders?(enabled: boolean): void;
   dispose?(): void;
   onHeightMapUpdate?(heightMap: THREE.Texture): void;
@@ -220,6 +223,9 @@ interface TerrainMaterialContext {
   resolution: number;
   wireframe: boolean;
   showChunkBorders: boolean;
+  skirtDepth: number;
+  skirtWidth: number;
+  normalStrength: number;
 }
 ```
 
