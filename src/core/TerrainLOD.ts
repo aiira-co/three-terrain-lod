@@ -299,7 +299,7 @@ export class TerrainLOD extends THREE.Group {
   // ============================================
 
   private writeChunkMatrix(id: number, data: ChunkInstanceData): void {
-    this.tempPosition.set(data.x, this.config.maxHeight * -0.4, data.z);
+    this.tempPosition.set(data.x, 0, data.z);
     this.tempScale.set(data.size, 1, data.size);
     this.tempMatrix.compose(this.tempPosition, this.tempQuaternion, this.tempScale);
     this.instancedMesh!.setMatrixAt(id, this.tempMatrix);
@@ -312,7 +312,7 @@ export class TerrainLOD extends THREE.Group {
   private isChunkVisible(chunk: ChunkInstanceData): boolean {
     const halfSize = chunk.size * 0.5;
     const verticalHalfExtent = this.config.maxHeight * 0.5 + this.config.skirtDepth;
-    this.chunkBoundsSphere.center.set(chunk.x, this.config.maxHeight * 0.1, chunk.z);
+    this.chunkBoundsSphere.center.set(chunk.x, this.config.maxHeight * 0.5, chunk.z);
     this.chunkBoundsSphere.radius = Math.sqrt((halfSize * halfSize * 2) + (verticalHalfExtent * verticalHalfExtent));
     return this.frustum.intersectsSphere(this.chunkBoundsSphere);
   }
@@ -1138,4 +1138,5 @@ export class TerrainLOD extends THREE.Group {
     this.isInitialized = false;
   }
 }
+
 
