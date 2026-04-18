@@ -7,7 +7,8 @@ import {
   ChunkInstanceData,
   ChunkCollisionData,
   ChunkCollisionCallback,
-  CollisionResolution
+  CollisionResolution,
+  DirtyRegionRect
 } from './types';
 import { InstancePool } from './InstancePool';
 import { QuadtreeNode, setCurrentCamera } from './QuadtreeNode';
@@ -71,6 +72,8 @@ export class TerrainLOD extends THREE.Group {
   private collisionCallback: ChunkCollisionCallback | null = null;
   private collisionResolution: CollisionResolution = 32;
   private heightmapImageData: ImageData | null = null;
+  private dirtyRegions: DirtyRegionRect[] = [];
+  private dirtyCollisionKeys: Set<string> = new Set();
 
   constructor(config: TerrainConfig = {}) {
     super();
@@ -727,12 +730,18 @@ export class TerrainLOD extends THREE.Group {
     drawCalls: number;
     materials: number;
     geometries: number;
+    collision: { cached: number; dirty: number; dirtyRegions: number };
   } {
     return {
       instances: this.instancePool.getStats(),
       drawCalls: 1,
       materials: 1,
-      geometries: 1
+      geometries: 1,
+      collision: {
+        cached: this.collisionCache.size,
+        dirty: this.dirtyCollisionKeys.size,
+        dirtyRegions: this.dirtyRegions.length,
+      }
     };
   }
 
@@ -773,6 +782,8 @@ export class TerrainLOD extends THREE.Group {
     if (invalidateCollision) {
       this.collisionCache.clear();
       this.heightmapImageData = null;
+      this.dirtyRegions = [];
+      this.dirtyCollisionKeys.clear();
     }
   }
 
@@ -782,7 +793,11 @@ export class TerrainLOD extends THREE.Group {
    * @param canvas - Canvas containing heightmap data (grayscale)
    * @param invalidateCollision - Whether to clear collision cache (default: false for performance during painting)
    */
-  public updateHeightMapFromCanvas(canvas: HTMLCanvasElement, invalidateCollision = false): void {
+  public updateHeightMapFromCanvas(
+    canvas: HTMLCanvasElement,
+    invalidateCollision = false,
+    dirtyRegion?: DirtyRegionRect | null
+  ): void {
     if (!this.heightMap) {
       // Create new canvas texture
       this.heightMap = new THREE.CanvasTexture(canvas);
@@ -811,9 +826,14 @@ export class TerrainLOD extends THREE.Group {
     }
 
     // Invalidate collision cache if requested
-    if (invalidateCollision) {
+    if (dirtyRegion) {
+      this.invalidateDirtyRegion(dirtyRegion);
+      this._copyCanvasRegionToHeightmapImageData(canvas, dirtyRegion);
+    } else if (invalidateCollision) {
       this.collisionCache.clear();
       this.heightmapImageData = null;
+      this.dirtyRegions = [];
+      this.dirtyCollisionKeys.clear();
     }
   }
 
@@ -825,7 +845,13 @@ export class TerrainLOD extends THREE.Group {
    * @param height - Data height
    * @param invalidateCollision - Whether to clear collision cache (default: true)
    */
-  public setRawHeightData(data: Float32Array | Uint8ClampedArray, width: number, height: number, invalidateCollision = true): void {
+  public setRawHeightData(
+    data: Float32Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+    invalidateCollision = true,
+    dirtyRegion?: DirtyRegionRect | null
+  ): void {
     // Convert to ImageData compatible format if needed
     if (data instanceof Float32Array) {
       // Convert float 0-1 to byte 0-255
@@ -843,9 +869,44 @@ export class TerrainLOD extends THREE.Group {
       this.heightmapImageData = new ImageData(data as any, width, height);
     }
 
-    if (invalidateCollision) {
+    if (dirtyRegion) {
+      this.invalidateDirtyRegion(dirtyRegion);
+    } else if (invalidateCollision) {
       this.collisionCache.clear();
+      this.dirtyRegions = [];
+      this.dirtyCollisionKeys.clear();
     }
+  }
+
+  /**
+   * Mark a heightmap region as dirty and invalidate overlapping collision chunks.
+   */
+  public invalidateDirtyRegion(rect: DirtyRegionRect): DirtyRegionRect | null {
+    const normalized = this._normalizeDirtyRegion(rect);
+    if (!normalized) {
+      return null;
+    }
+
+    this.dirtyRegions.push(normalized);
+    for (const key of this._getOverlappingCollisionKeys(normalized)) {
+      this.dirtyCollisionKeys.add(key);
+      this.collisionCache.delete(key);
+    }
+
+    return normalized;
+  }
+
+  public getDirtyRegions(): DirtyRegionRect[] {
+    return this.dirtyRegions.map((region) => ({ ...region }));
+  }
+
+  public getDirtyCollisionChunkKeys(): string[] {
+    return Array.from(this.dirtyCollisionKeys.values());
+  }
+
+  public clearDirtyRegions(): void {
+    this.dirtyRegions = [];
+    this.dirtyCollisionKeys.clear();
   }
 
   /**
@@ -922,6 +983,8 @@ export class TerrainLOD extends THREE.Group {
     this.collisionResolution = resolution;
     // Clear cache when resolution changes
     this.collisionCache.clear();
+    this.dirtyRegions = [];
+    this.dirtyCollisionKeys.clear();
   }
 
   /**
@@ -1115,6 +1178,8 @@ export class TerrainLOD extends THREE.Group {
     this.instancePool.clear();
     this.visibleInstanceIds.clear();
     this.collisionCache.clear();
+    this.dirtyCollisionKeys.clear();
+    this.dirtyRegions = [];
     this.collisionCallback = null;
     this.heightmapImageData = null;
     this.sharedGeometry?.dispose();
@@ -1136,6 +1201,99 @@ export class TerrainLOD extends THREE.Group {
     this.proceduralDiffuseTexture = null;
     this.initPromise = null;
     this.isInitialized = false;
+  }
+
+  private _normalizeDirtyRegion(rect: DirtyRegionRect): DirtyRegionRect | null {
+    const dimensions = this._getHeightMapDimensions();
+    const width = dimensions?.width ?? 0;
+    const height = dimensions?.height ?? 0;
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+
+    const x = Math.max(0, Math.min(width, Math.floor(rect.x)));
+    const y = Math.max(0, Math.min(height, Math.floor(rect.y)));
+    const regionWidth = Math.max(0, Math.min(width - x, Math.ceil(rect.width)));
+    const regionHeight = Math.max(0, Math.min(height - y, Math.ceil(rect.height)));
+    if (regionWidth === 0 || regionHeight === 0) {
+      return null;
+    }
+
+    return { x, y, width: regionWidth, height: regionHeight };
+  }
+
+  private _getOverlappingCollisionKeys(rect: DirtyRegionRect): string[] {
+    const dimensions = this._getHeightMapDimensions();
+    const width = dimensions?.width ?? 0;
+    const height = dimensions?.height ?? 0;
+    if (width <= 0 || height <= 0) {
+      return [];
+    }
+
+    const divisions = Math.max(1, Math.pow(2, this.config.levels - 1));
+    const pixelsPerChunkX = width / divisions;
+    const pixelsPerChunkY = height / divisions;
+    const startX = Math.max(0, Math.floor(rect.x / pixelsPerChunkX));
+    const endX = Math.max(0, Math.min(divisions - 1, Math.floor((rect.x + rect.width - 1) / pixelsPerChunkX)));
+    const startZ = Math.max(0, Math.floor(rect.y / pixelsPerChunkY));
+    const endZ = Math.max(0, Math.min(divisions - 1, Math.floor((rect.y + rect.height - 1) / pixelsPerChunkY)));
+    const keys: string[] = [];
+
+    for (let z = startZ; z <= endZ; z++) {
+      for (let x = startX; x <= endX; x++) {
+        keys.push(`${x}_${z}`);
+      }
+    }
+
+    return keys;
+  }
+
+  private _copyCanvasRegionToHeightmapImageData(canvas: HTMLCanvasElement, rect: DirtyRegionRect): void {
+    if (!this.heightmapImageData) {
+      return;
+    }
+
+    const normalized = this._normalizeDirtyRegion(rect);
+    if (!normalized) {
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return;
+    }
+
+    const region = ctx.getImageData(normalized.x, normalized.y, normalized.width, normalized.height);
+    for (let row = 0; row < normalized.height; row++) {
+      const srcStart = row * normalized.width * 4;
+      const dstStart = ((normalized.y + row) * this.heightmapImageData.width + normalized.x) * 4;
+      this.heightmapImageData.data.set(
+        region.data.subarray(srcStart, srcStart + normalized.width * 4),
+        dstStart
+      );
+    }
+  }
+
+  private _getHeightMapDimensions(): { width: number; height: number } | null {
+    if (this.heightmapImageData) {
+      return {
+        width: this.heightmapImageData.width,
+        height: this.heightmapImageData.height,
+      };
+    }
+
+    const image = this.heightMap?.image;
+    if (!image || typeof image !== 'object') {
+      return null;
+    }
+
+    const width = 'width' in image && typeof image.width === 'number' ? image.width : 0;
+    const height = 'height' in image && typeof image.height === 'number' ? image.height : 0;
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+
+    return { width, height };
   }
 }
 

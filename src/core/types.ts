@@ -43,6 +43,16 @@ export interface TerrainConfig {
 }
 
 /**
+ * Rectangle in heightmap pixel space used for partial invalidation.
+ */
+export interface DirtyRegionRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
  * Resolved configuration with all required fields
  */
 export interface ResolvedTerrainConfig extends Required<TerrainConfig> {

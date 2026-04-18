@@ -6,7 +6,8 @@ export {
   ChunkInstanceData,
   ChunkCollisionData,
   ChunkCollisionCallback,
-  CollisionResolution
+  CollisionResolution,
+  DirtyRegionRect
 } from './types';
 export { InstancePool } from './InstancePool';
 export { QuadtreeNode, setCurrentCamera, getCurrentCamera } from './QuadtreeNode';
