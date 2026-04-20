@@ -767,9 +767,10 @@ export class TerrainLOD extends THREE.Group {
     if (texture !== this.proceduralHeightMap) {
       this.proceduralHeightMap = null;
     }
+    const shouldUseMipmaps = texture.generateMipmaps !== false;
     texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.magFilter = THREE.LinearFilter;
-    texture.minFilter = THREE.LinearMipMapLinearFilter;
+    texture.minFilter = shouldUseMipmaps ? THREE.LinearMipMapLinearFilter : THREE.LinearFilter;
     texture.needsUpdate = true;
 
     // Notify material provider

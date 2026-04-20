@@ -1,6 +1,6 @@
 {
   "name": "@interverse/three-terrain-lod",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "High-performance LOD terrain system for Three.js with quadtree-based chunking and swappable materials",
   "main": "dist/index.js",
   "module": "dist/esm/index.js",
