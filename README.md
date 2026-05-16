@@ -397,6 +397,48 @@ interface ChunkCollisionData {
 }
 ```
 
+## Rapier Physics Layer (`TerrainPhysics`)
+
+A built-in wrapper for [`@dimforge/rapier3d-simd-compat`](https://www.npmjs.com/package/@dimforge/rapier3d-simd-compat) that builds and maintains heightfield colliders matching the rendered terrain. Rapier is a `peerDependency` — install it separately.
+
+```ts
+import RAPIER from '@dimforge/rapier3d-simd-compat';
+import { TerrainLOD, TerrainPhysics } from '@interverse/three-terrain-lod';
+
+await RAPIER.init();
+
+const terrain = new TerrainLOD({ heightMapUrl, worldSize, maxHeight });
+scene.add(terrain);
+
+const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+
+const physics = new TerrainPhysics({
+  rapier: RAPIER,
+  world,
+  terrain,
+  config: {
+    friction: 0.7,
+    dynamicLoading: true,
+    maxActiveColliders: 64,
+  },
+});
+await physics.init();
+
+// per-frame
+terrain.update(camera);
+world.step();
+
+// Sample terrain height or raycast against it
+const h = physics.getHeightAt(x, z);
+const hit = physics.castRay({ x, y: 500, z }, { x: 0, y: -1, z: 0 });
+```
+
+Notes for dynamic bodies that fall onto terrain:
+
+- A heightfield collider is geometrically thin. Fast-falling dynamic bodies will tunnel through it unless you enable CCD on the body:
+  `desc.setCcdEnabled(true); desc.setSoftCcdPrediction(2.0);`
+- The Rapier module is injected (not statically imported) so consumers can pick `rapier3d-compat` or `rapier3d-simd-compat`.
+
 ## License
 
 MIT

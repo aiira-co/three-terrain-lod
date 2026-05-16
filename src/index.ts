@@ -15,3 +15,14 @@ export {
 
 // Material exports
 export { DefaultTerrainMaterial, TerrainMaterialNodes } from './materials';
+
+// Physics exports
+export {
+  TerrainPhysics,
+  HeightfieldBuilder,
+  TerrainPhysicsConfig,
+  ResolvedTerrainPhysicsConfig,
+  ChunkPhysicsEntry,
+  TerrainRayHit,
+  TerrainPhysicsInit,
+} from './physics';
